@@ -1,0 +1,218 @@
+import processing.serial.*;
+
+Serial myPort;
+String serialData;
+
+int angle = 0;
+int distance = 0;
+int irState = 1;
+
+final int MAX_RANGE = 50;
+final int RADAR_RADIUS = 380;
+
+PGraphics trailLayer;
+boolean showWarning = false;
+int warningFlash = 0;
+
+float[] graphData = new float[60];
+
+void setup() {
+  size(1200, 850);
+  smooth();
+
+  myPort = new Serial(this, "COM14", 9600);
+  myPort.bufferUntil('\n');
+
+  trailLayer = createGraphics(width, height);
+  trailLayer.beginDraw();
+  trailLayer.background(0);
+  trailLayer.endDraw();
+
+  for (int i = 0; i < graphData.length; i++) {
+    graphData[i] = random(20, 80);
+  }
+}
+
+void draw() {
+  background(0);
+
+  // ---------- RADAR SPACE ----------
+  pushMatrix();
+  translate(width / 2, height - 140);
+
+  drawRadarGrid();
+  drawSweepSector();
+  drawTarget();
+
+  popMatrix();
+
+  // ---------- HUD SPACE ----------
+  drawHUD();
+  drawGraphs();
+  drawWarningOverlay();
+}
+
+void serialEvent(Serial myPort) {
+  serialData = myPort.readStringUntil('\n');
+  if (serialData != null) {
+    serialData = trim(serialData);
+    String[] parts = split(serialData, ',');
+    if (parts.length == 3) {
+      angle = int(parts[0]);
+      distance = int(parts[1]);
+      irState = int(parts[2]);
+      showWarning = (irState == 0 && distance < MAX_RANGE);
+    }
+  }
+}
+
+/* ================= RADAR GRID ================= */
+
+void drawRadarGrid() {
+  noFill();
+
+  // Distance rings + labels
+  for (int i = 1; i <= 6; i++) {
+    int r = i * RADAR_RADIUS / 6;
+
+    // Thin ring
+    stroke(0, 255, 120, 80);
+    arc(0, 0, r * 2, r * 2, PI, TWO_PI);
+
+    // Bold ring every 2 steps
+    if (i % 2 == 0) {
+      stroke(0, 255, 120, 160);
+      arc(0, 0, r * 2, r * 2, PI, TWO_PI);
+    }
+
+    // Distance label
+    fill(0, 255, 120);
+    textSize(14);
+    textAlign(LEFT);
+    text((i * MAX_RANGE / 6) + " cm", 8, -r + 5);
+    noFill();
+  }
+
+  // Angle grid lines (double layered)
+  for (int a = 0; a <= 180; a += 15) {
+    float x = cos(radians(a)) * RADAR_RADIUS;
+    float y = -sin(radians(a)) * RADAR_RADIUS;
+
+    stroke(0, 255, 120, 70);
+    line(0, 0, x, y);
+
+    if (a % 30 == 0) {
+      stroke(0, 255, 120, 160);
+      line(0, 0, x, y);
+    }
+  }
+}
+
+/* ================= SWEEP ================= */
+
+void drawSweepSector() {
+  noStroke();
+  fill(0, 255, 120, 70);
+  arc(0, 0,
+      RADAR_RADIUS * 2,
+      RADAR_RADIUS * 2,
+      radians(angle - 6),
+      radians(angle + 6),
+      PIE);
+
+  stroke(140, 255, 200);
+  strokeWeight(2);
+  float x = cos(radians(angle)) * RADAR_RADIUS;
+  float y = -sin(radians(angle)) * RADAR_RADIUS;
+  line(0, 0, x, y);
+  strokeWeight(1);
+}
+
+/* ================= TARGET ================= */
+
+void drawTarget() {
+  if (irState == 0 && distance < MAX_RANGE) {
+    float mapped = map(distance, 0, MAX_RANGE, 0, RADAR_RADIUS);
+    float x = cos(radians(angle)) * mapped;
+    float y = -sin(radians(angle)) * mapped;
+
+    trailLayer.beginDraw();
+    trailLayer.noStroke();
+    trailLayer.fill(0, 255, 120, 150);
+    trailLayer.ellipse(x + width / 2, y + height - 140, 6, 6);
+    trailLayer.endDraw();
+
+    stroke(255, 70, 70);
+    noFill();
+    ellipse(x, y, 26, 26);
+    line(x - 14, y, x + 14, y);
+    line(x, y - 14, x, y + 14);
+  }
+
+  image(trailLayer, 0, 0);
+}
+
+/* ================= HUD ================= */
+
+void drawHUD() {
+  fill(0, 255, 120);
+  textFont(createFont("Consolas", 18));
+  textAlign(LEFT);
+
+  text("AEGIS SURVEILLANCE SYSTEM", 30, 45);
+  text("MODE: ACTIVE SCAN", 30, 75);
+  text("AZIMUTH: " + angle + "°", 30, 105);
+  text("RANGE: " + distance + " cm", 30, 135);
+
+  textAlign(RIGHT);
+  text("SECURITY LEVEL: OMEGA", width - 30, 45);
+  text("LINK STATUS: STABLE", width - 30, 75);
+}
+
+/* ================= MINI GRAPHS ================= */
+
+void drawGraphs() {
+  int gx = width - 320;
+  int gy = 120;
+  int gw = 260;
+  int gh = 90;
+
+  // Update fake telemetry
+  for (int i = 0; i < graphData.length - 1; i++) {
+    graphData[i] = graphData[i + 1];
+  }
+  graphData[graphData.length - 1] = random(20, 80);
+
+  stroke(0, 255, 120);
+  noFill();
+  rect(gx, gy, gw, gh);
+
+  beginShape();
+  for (int i = 0; i < graphData.length; i++) {
+    float x = map(i, 0, graphData.length - 1, gx, gx + gw);
+    float y = map(graphData[i], 0, 100, gy + gh, gy);
+    vertex(x, y);
+  }
+  endShape();
+
+  fill(0, 255, 120);
+  textSize(14);
+  textAlign(LEFT);
+  text("SIGNAL ACTIVITY", gx, gy - 10);
+}
+
+/* ================= WARNING ================= */
+
+void drawWarningOverlay() {
+  if (showWarning) {
+    warningFlash = (warningFlash + 1) % 60;
+
+    fill(255, warningFlash < 30 ? 0 : 80, 0, 200);
+    rect(0, height / 2 - 70, width, 140);
+
+    fill(0);
+    textAlign(CENTER);
+    textFont(createFont("Impact", 42));
+    text("⚠ TARGET DETECTED — ENGAGING ⚠", width / 2, height / 2 + 14);
+  }
+}
