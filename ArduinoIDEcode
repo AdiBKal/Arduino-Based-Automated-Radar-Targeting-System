@@ -1,6 +1,6 @@
 #include <Servo.h>
 
-// ---------- PIN DEFINITIONS ----------
+// ---------------- PIN DEFINITIONS ----------------
 #define TRIG_PIN 9
 #define ECHO_PIN 10
 #define IR_PIN 7
@@ -8,24 +8,34 @@
 #define RADAR_SERVO_PIN   6
 #define TRIGGER_SERVO_PIN 5
 
-// ---------- CONSTANTS ----------
+// ---------------- CONSTANTS ----------------
 #define MAX_RANGE 50        // cm
+#define TRACK_RANGE 30      // cm (tracking distance)
 #define TRIGGER_IDLE 20
 #define TRIGGER_FIRE 70
 
-// ---------- OBJECTS ----------
+#define ANGLE_MIN 10
+#define ANGLE_MAX 170
+#define STEP_SIZE 2
+
+// ---------------- OBJECTS ----------------
 Servo radarServo;
 Servo triggerServo;
 
-// ---------- VARIABLES ----------
+// ---------------- VARIABLES ----------------
 long duration;
 int distance;
 int irState;
 
-int angle = 10;             // start angle
-int direction = 1;          // 1 = forward, -1 = backward
+// Radar motion
+int angle = ANGLE_MIN;
+int direction = 1;
 
-// ---------- SETUP ----------
+// Tracking
+bool trackingMode = false;
+int targetAngle = 90;
+
+// ---------------- SETUP ----------------
 void setup() {
   pinMode(TRIG_PIN, OUTPUT);
   pinMode(ECHO_PIN, INPUT);
@@ -41,53 +51,99 @@ void setup() {
   delay(300);
 }
 
-// ---------- MAIN LOOP ----------
+// ---------------- MAIN LOOP ----------------
 void loop() {
-  scanAndReact(angle);
 
-  // Update angle smoothly within ONE 180° sector
-  angle += direction * 2;
+  if (!trackingMode) {
+    // -------- SCANNING MODE --------
+    scanAndDetect();
 
-  if (angle >= 170) {
-    angle = 170;
-    direction = -1;
-  } 
-  else if (angle <= 10) {
-    angle = 10;
-    direction = 1;
+    angle += direction * STEP_SIZE;
+
+    if (angle >= ANGLE_MAX) {
+      angle = ANGLE_MAX;
+      direction = -1;
+    } 
+    else if (angle <= ANGLE_MIN) {
+      angle = ANGLE_MIN;
+      direction = 1;
+    }
+
+  } else {
+    // -------- TRACKING MODE --------
+    trackTarget();
   }
 }
 
-// ---------- SCAN + REACT ----------
-void scanAndReact(int currentAngle) {
-  radarServo.write(currentAngle);
+// ---------------- SCAN MODE ----------------
+void scanAndDetect() {
+  radarServo.write(angle);
   delay(25);
 
   distance = readUltrasonic();
   irState = digitalRead(IR_PIN);  // ACTIVE-LOW
 
   // Send data to Processing
-  Serial.print(currentAngle);
-  Serial.print(",");
-  Serial.print(distance);
-  Serial.print(",");
-  Serial.println(irState);
+  sendSerial(angle, distance, irState);
 
-  // Trigger condition
-  if (irState == LOW && distance < 30) {
-    fireTrigger();
+  // Enter tracking mode
+  if (irState == LOW && distance < TRACK_RANGE) {
+    trackingMode = true;
+    targetAngle = angle;
   }
 }
 
-// ---------- TRIGGER SERVO ----------
+// ---------------- TRACKING MODE ----------------
+void trackTarget() {
+
+  radarServo.write(targetAngle);
+  delay(25);
+
+  int centerDist = readUltrasonic();
+  int leftDist, rightDist;
+
+  // Check if target lost
+  irState = digitalRead(IR_PIN);
+  if (irState == HIGH || centerDist >= MAX_RANGE) {
+    trackingMode = false;
+    return;
+  }
+
+  // Sample left
+  radarServo.write(targetAngle - STEP_SIZE);
+  delay(15);
+  leftDist = readUltrasonic();
+
+  // Sample right
+  radarServo.write(targetAngle + STEP_SIZE);
+  delay(15);
+  rightDist = readUltrasonic();
+
+  // Decide direction
+  if (leftDist < rightDist && targetAngle > ANGLE_MIN) {
+    targetAngle -= STEP_SIZE;
+  } 
+  else if (rightDist < leftDist && targetAngle < ANGLE_MAX) {
+    targetAngle += STEP_SIZE;
+  }
+
+  // Fire condition (optional)
+  if (centerDist < 20) {
+    fireTrigger();
+  }
+
+  sendSerial(targetAngle, centerDist, irState);
+}
+
+// ---------------- TRIGGER SERVO ----------------
 void fireTrigger() {
   triggerServo.write(TRIGGER_FIRE);
   delay(300);
   triggerServo.write(TRIGGER_IDLE);
-  delay(500);   // cooldown
+  delay(500);
 }
 
-// ---------- ULTRASONIC FUNCTION ----------
+// ---------------- ULTRASONIC FUNCTION ----------------
 int readUltrasonic() {
   digitalWrite(TRIG_PIN, LOW);
   delayMicroseconds(2);
@@ -103,4 +159,13 @@ int readUltrasonic() {
   if (d > MAX_RANGE) d = MAX_RANGE;
 
   return d;
+}
+
+// ---------------- SERIAL FORMAT ----------------
+void sendSerial(int a, int d, int ir) {
+  Serial.print(a);
+  Serial.print(",");
+  Serial.print(d);
+  Serial.print(",");
+  Serial.println(ir);
 }
